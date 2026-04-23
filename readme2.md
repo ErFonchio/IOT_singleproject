@@ -8,49 +8,29 @@ The purpose is to keep the measurements separated by experiment, so each block c
 
 ### Project layout used in the experiments
 
-The workspace is split into three independent pieces, with the receiver built for the Heltec WiFi LoRa 32 V4:
+The final workspace is split into three independent pieces, with the receiver built for the Heltec WiFi LoRa 32 V4:
 
-* `final/sender` for signal generation and current measurement
+* `final/sender` for signal generation and current measurement with esp32 V2
 * `final/receiver` for adaptive sampling, FFT and MQTT publication on the Heltec WiFi LoRa 32 V4
 * `final/server` for the local Mosquitto broker used by the WiFi tests
 
-Some runs are purely local and some include the radio stack, so the report keeps them separated on purpose.
-
 ### Separate experiment data
 
-Use this section as the index for the data blocks collected during the experiments. Each subsection is intentionally independent so you can paste raw logs, averages or screenshots without changing the rest of the report.
+#### 1. Aggregated sampling results
 
-#### 1. Max sampling current test
+The table below collects the most relevant results for the three sampling experiments requested in this report: maximum sampling, adaptive sampling and sampling with light sleep.
 
-This block is for the analogRead case at maximum frequency, measured as consumption with INA219.
+| Case | Mode | Target rate Hz | Main measured result | Current A |
+| :--- | :--- | :---: | :--- | :---: |
+| Max sampling analogRead | basic / oversampling | max | steady profile around the mid-60 mA range | 0.060 - 0.065 |
+| Max sampling adc1_get_raw | basic / oversampling | max | steady profile around the low-60 mA range | 0.060 - 0.065 |
+| Adaptive sampling receiver | adaptive | 256 | sample_count=1280, average=2295.2398, capture_us=4999756, payload_bytes=109, rtt_us=44935 | not measured in this block |
+| AnalogRead with light sleep | sleep between samples | 250 | wake-sleep pattern with repeated low/high consumption cycles | 0.006 - 0.060 |
+| Raw read with light sleep | sleep between samples | 250 | same wake-sleep consumption profile as the analogRead undersampling case | 0.006 - 0.060 |
 
-The attached image represents the analogRead run at maximum frequency. The current sits mostly around the mid-60 mA range, with short dips and spikes during the run.
+The maximum-sampling rows describe the board while it keeps sampling continuously. The adaptive row collects the key metrics from the adapted receiver path, including the transmitted payload size and end-to-end latency. The sleep rows show the current oscillation caused by the repeated wake-up cycle, and the raw undersampling case follows the same consumption profile as the analogRead light-sleep experiment.
 
-This is the reference point for the analogRead consumption profile when the loop runs as fast as possible.
-
-#### 2. Max sampling current test at 250 Hz
-
-This block is for the analogRead case at 250 Hz, also measured as consumption with INA219.
-
-The attached image represents the analogRead run at 250 Hz. The current sits mostly around the mid-40 mA range, with periodic spikes up to about 55 mA.
-
-The result is lower and more stable than the maximum-frequency analogRead case, which confirms that reducing the sampling rate decreases the consumption in a visible way.
-
-#### 3. Raw read current test
-
-This block is for the raw read case at maximum frequency, also measured as consumption with INA219.
-
-The attached plot for `adc1_get_raw` shows a very similar steady-state profile, with the board holding around the low-60 mA range and a few sharper downward spikes during the run. The important point is that the raw path keeps the consumption stable while the sampling loop stays continuous.
-
-#### 4. Analog read current test with light sleep at 250 Hz
-
-This block is for the analogRead case at 250 Hz with light sleep between samples, also measured as consumption with INA219.
-
-The attached plot shows the expected wake-sleep pattern: the current oscillates between about 6 mA and 60 mA. The low part corresponds to the light-sleep phase, while the peaks correspond to the wake-up, ADC read and immediate return to sleep.
-
-This is the correct result to associate with the analogRead light-sleep experiment. The raw read version at 250 Hz is still pending and should be added only after that test is completed.
-
-#### 5. Max sampling benchmark throughput
+#### 2. Max sampling benchmark throughput
 
 This block is for the raw throughput comparison between `analogRead` and `adc1_get_raw`.
 
@@ -61,7 +41,7 @@ This block is for the raw throughput comparison between `analogRead` and `adc1_g
 
 The result is clear: `adc1_get_raw` is about 2.5x faster than `analogRead` in this benchmark, so it is the better option when the goal is raw ADC throughput.
 
-#### 6. MQTT sender, latency and payload volume tests
+#### 3. MQTT sender, latency and payload volume tests
 
 The MQTT sender tests were used to measure the end-to-end latency of the message path and the amount of data transmitted over the network.
 
@@ -79,7 +59,7 @@ The observed results are summarised below.
 
 The payload volume remains very small because only the aggregated value is transmitted, not the full sample stream. The latency changes more than the payload size, so the dominant cost is the network and radio activity rather than the number of bytes carried by MQTT.
 
-#### 7. FFT and averaging tests
+#### 4. FFT and averaging tests
 
 The FFT and averaging tests were used to measure how long the FFT stage takes and how much current the board draws while doing the computation.
 
@@ -99,7 +79,7 @@ The repeated runs show that FFT time and current can vary noticeably between exe
 
 The FFT results were used to estimate the dominant frequency and to decide the next sampling rate in the receiver. For this report, the important point is the execution time of the FFT stage and the current draw expressed directly in amperes.
 
-#### 8. Final receiver flow
+#### 5. Final receiver flow
 
 The `final/receiver` code combines the previous ideas into one complete sequence on the Heltec WiFi LoRa 32 V4:
 
@@ -132,6 +112,24 @@ flowchart TD
 
 The plot shows the distinct phases of the integrated run: an initial low-activity region, the sampling and FFT-related step increase, the stable adaptive-sampling plateau, and the final drop when the device finishes the experiment and goes to sleep.
 
+#### 6. LoRa communication test
+
+This section documents the use of LoRa as the communication method for the wide-area part of the system.
+
+The device overview in The Things Stack Sandbox shows the end device configuration used for the LoRaWAN path:
+
+| Field | Value |
+| :--- | :--- |
+| End device ID | `er-meglio-device` |
+| DevEUI | registered in the application |
+| Frequency plan | Europe 863-870 MHz |
+| LoRaWAN version | 1.0.3 |
+| Uplinks at the time of the screenshot | none yet |
+
+The relevant point of this test is not the payload size, but the communication role of LoRa itself. Compared with WiFi/MQTT, LoRa is the longer-range and lower-throughput option, so it is better suited when the device must transmit only a compact aggregated value and keep the radio activity minimal.
+
+This device overview page in The Things Stack is the reference for the LoRa setup used in the experiment. If the screenshot is saved locally later, it can be inserted here as a figure without changing the rest of the section.
+
 ### What changed across experiments
 
 The point of having separate runs was to isolate what each part of the system costs.
@@ -141,6 +139,36 @@ The point of having separate runs was to isolate what each part of the system co
 * WiFi and MQTT are the most visible step when they are turned on.
 * Adaptive sampling helps only if the whole execution flow is organized around it.
 
-### Conclusion
+### Final setup and wiring
 
-This second README is meant to document the experimental path that led to the current `final` implementation. It is intentionally different from the main README: the first one can remain the formal assignment write-up, while this one is the working report of the measurements actually performed in this repository.
+#### How to start the final code
+
+The final experiment is started in three steps:
+
+1. Start the local MQTT broker with `cd final/server` and `docker compose up -d`.
+2. Flash and monitor the sender board with `cd final/sender` and `pio run -t upload -t monitor`.
+3. Flash and monitor the receiver board with `cd final/receiver` and `pio run -t upload -t monitor`.
+
+Before launching the receiver, make sure the WiFi credentials and broker address in `final/receiver/src/secrets.h` match the local network.
+
+#### Hardware connections
+
+The INA219 is wired in series with the V4 power supply line, so that all current 
+drawn by the V4 flows through the INA219 shunt and is measured by the V2.
+
+| Signal | From | To | Notes |
+| :--- | :--- | :--- | :--- |
+| Power path | V2 VIN | INA219 VIN+ | 5V USB from PC enters the measurement path |
+| Power path | INA219 VIN- | V4 5V | measured current exits toward the V4 |
+| I2C clock | V2 GPIO22 | INA219 SCL | I2C bus for current readings |
+| I2C data | V2 GPIO21 | INA219 SDA | I2C bus for current readings |
+| INA chip power | V2 3V3 | INA219 VCC | logic supply for the INA219 chip |
+| Common ground | V2 GND | INA219 GND | shared ground |
+| Common ground | V2 GND | V4 GND | shared ground across all three devices |
+| Start pulse | V2 GPIO4 | V4 GPIO5 | V2 signals the start of each experiment |
+| Signal line | V2 GPIO25 | V4 GPIO7 | sinusoidal signal generated by V2, sampled by V4 |
+
+The V2 is connected to the PC via USB, which is the sole power source for the 
+entire circuit. Current flows from the USB 5V rail through the INA219 shunt to 
+the V4, so the INA219 captures the full consumption of the V4. The V2 reads the 
+INA219 over I2C and logs the measurements to the serial terminal.

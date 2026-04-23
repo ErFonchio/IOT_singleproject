@@ -104,8 +104,13 @@ static void startAggregationCapture(uint32_t sampleRateHz) {
 }
 
 static void waitUntilDeadline(uint64_t deadlineUs) {
-  while (static_cast<int64_t>(micros() - deadlineUs) < 0) {
-    yield();
+  const uint64_t nowUs = static_cast<uint64_t>(micros());
+  if (nowUs < deadlineUs) {
+    const uint64_t sleepUs = deadlineUs - nowUs;
+    if (sleepUs > 0) {
+      esp_sleep_enable_timer_wakeup(sleepUs);
+      esp_light_sleep_start();
+    }
   }
 }
 
@@ -212,6 +217,7 @@ static void formatUint(char *buffer, size_t bufferSize, uint32_t value) {
   snprintf(buffer, bufferSize, "%lu", static_cast<unsigned long>(value));
 }
 
+
 static double computeDominantFrequencyHz() {
   const uint32_t frameCount = analysisIndex / FFT_SIZE;
   double highestObservedFrequency = 0.0;
@@ -220,9 +226,16 @@ static double computeDominantFrequencyHz() {
   for (uint32_t frame = 0; frame < frameCount; frame++) {
     const uint32_t offset = frame * FFT_SIZE;
 
+    // DOPO (con rimozione DC offset)
+    double mean = 0.0;
     for (uint16_t i = 0; i < FFT_SIZE; i++) {
-      fftReal[i] = analysisSamples[offset + i];
-      fftImag[i] = 0.0;
+        mean += analysisSamples[offset + i];
+    }
+    mean /= FFT_SIZE;
+
+    for (uint16_t i = 0; i < FFT_SIZE; i++) {
+        fftReal[i] = analysisSamples[offset + i] - mean; // ← unica differenza
+        fftImag[i] = 0.0;
     }
 
     fft.windowing(fftReal, FFT_SIZE, FFT_WIN_TYP_HAMMING, FFT_FORWARD);

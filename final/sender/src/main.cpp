@@ -2,6 +2,7 @@
 #include <Wire.h>
 #include <Adafruit_INA219.h>
 #include <driver/dac.h>
+#include <esp_sleep.h>
 #include <math.h>
 
 namespace {
