@@ -42,12 +42,16 @@ void loop(void)
   power_mW = ina219.getPower_mW();
   loadvoltage = busvoltage + (shuntvoltage / 1000);
 
-  Serial.printf(">busvoltage:%f\r\n", busvoltage);
-  Serial.printf(">shuntvoltage:%f\r\n", shuntvoltage);
-  Serial.printf(">loadvoltage:%f\r\n", loadvoltage);
-  Serial.printf(">current_mA:%f\r\n", current_mA);
-  Serial.printf(">powe_mW:%f\r\n", power_mW);
-
+//   Serial.print(busvoltage);
+//   Serial.printf("\t");
+//   Serial.printf("shuntvoltage:%f", shuntvoltage);
+//   Serial.printf("\t");
+//   Serial.print(loadvoltage);
+//   Serial.printf("\t");
+  Serial.print(current_mA);
+//   Serial.printf("\t");
+//   Serial.printf("powe_mW:%f", power_mW);
+  
   Serial.println("");
 
   delay(50);

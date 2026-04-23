@@ -1,7 +1,7 @@
 #include <Arduino.h>
 #include <driver/dac.h>
 
-#define SAMPLING_FREQUENCY 10000 // Hz
+#define SAMPLING_FREQUENCY 15000 // Hz
 
 struct Component {
   double amplitude;

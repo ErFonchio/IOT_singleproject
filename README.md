@@ -112,3 +112,20 @@ fft_average_sender,label=256,target_hz=256,duration_us=4000000,expected_samples=
 FFT average sender completed
 fft_average_sender,label=10k,target_hz=10000,duration_us=102400,expected_samples=1024,elapsed_us=1786,elapsed_ms=1.7860,generated_samples=310,generated_hz=173572.2284,avg_current_mA=31.680571,avg_power_mW=147.430011,energy_mJ=0.263310,last_dac=179
 fft_average_sender,label=256,target_hz=256,duration_us=4000000,expected_samples=1024,elapsed_us=1490,elapsed_ms=1.4900,generated_samples=320,generated_hz=214765.1007,avg_current_mA=38.138522,avg_power_mW=176.542282,energy_mJ=0.263048,last_dac=133
+
+## mqtt_sender
+1. sampling_sender,label=10k,target_hz=10000,target_samples=50000,signal_hz=10000,period_us=100,elapsed_us=5000005,generator_hz=10403.39,avg_current_mA=53.81,avg_power_mW=252.27,energy_mJ=1261.35,power_samples=794,generator_samples=52017,last_dac=185,missed_deadlines=201
+latency_probe,label=10k,request_id=1,rtt_us=0,response_received=no,response=timeout
+2. sampling_sender,label=256,target_hz=256,target_samples=1280,signal_hz=10000,period_us=3906,elapsed_us=5003590,generator_hz=10401.93,avg_current_mA=45290.23,avg_power_mW=214846.25,energy_mJ=1075002.50,power_samples=723,generator_samples=52047,last_dac=220,missed_deadlines=5
+latency_probe,label=256,request_id=2,rtt_us=0,response_received=no,response=timeout
+sampling_sender_run,total_elapsed_us=20986000,total_elapsed_ms=20986.00
+
+nt=50000,average=2298.9356,capture_us=5001731,payload_bytes=112,published=yes,payload=label=analog_average;case=10k;target_hz=10000;window_s=5;sample_count=50000;average=2298.9356;capture_us=5001731
+mqtt_wifi_receiver_latency,response_published=yes,response=sent_us=11430185;ack_us=11485392
+latency_probe,label=10k,rtt_us=63153,response_received=yes
+Waiting for START pulse on GPIO5...
+START pulse received
+mqtt_wifi_receiver,label=256,target_hz=256,window_s=5,sample_count=1280,average=2295.2398,capture_us=4999756,payload_bytes=109,published=yes,payload=label=analog_average;case=256;target_hz=256;window_s=5;sample_count=1280;average=2295.2398;capture_us=4999756
+mqtt_wifi_receiver_latency,response_published=yes,response=sent_us=16912399;ack_us=16945174
+latency_probe,label=256,rtt_us=44935,response_received=yes
+MQTT WiFi receiver completed

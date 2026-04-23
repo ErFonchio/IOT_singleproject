@@ -16,6 +16,7 @@ constexpr char kClientId[] = "mqtt_wifi_receiver";
 constexpr char kTelemetryTopic[] = "mqtt_wifi/telemetry";
 constexpr char kLatencyRequestTopic[] = "mqtt_wifi/latency/request";
 constexpr char kLatencyResponseTopic[] = "mqtt_wifi/latency/response";
+constexpr uint32_t kLatencyTimeoutMs = 5000;
 
 struct ExperimentCase {
   const char *label;
@@ -44,8 +45,18 @@ struct LatencyEcho {
 
 LatencyEcho latencyEcho;
 
+struct LatencyProbe {
+  bool active = false;
+  bool responseReceived = false;
+  uint32_t sentUs = 0;
+  uint32_t responseUs = 0;
+};
+
+LatencyProbe latencyProbe;
+
 void ensureNetwork();
 void handleLatencyEcho();
+void runLatencyProbe(const ExperimentCase &experiment);
 
 void configureAdc() {
   pinMode(kAdcPin, INPUT);
@@ -127,16 +138,22 @@ bool connectMqtt() {
     }
   }
 
-  return mqttClient.subscribe(kLatencyRequestTopic);
+  const bool requestSubscribed = mqttClient.subscribe(kLatencyRequestTopic);
+  const bool responseSubscribed = mqttClient.subscribe(kLatencyResponseTopic);
+  return requestSubscribed && responseSubscribed;
 }
 
 void onMqttMessage(char *topic, byte *payload, unsigned int length) {
-  if (strcmp(topic, kLatencyRequestTopic) != 0) {
+  if (strcmp(topic, kLatencyRequestTopic) == 0) {
+    latencyEcho.payload = String(reinterpret_cast<char *>(payload), length);
+    latencyEcho.pending = true;
     return;
   }
 
-  latencyEcho.payload = String(reinterpret_cast<char *>(payload), length);
-  latencyEcho.pending = true;
+  if (strcmp(topic, kLatencyResponseTopic) == 0 && latencyProbe.active) {
+    latencyProbe.responseUs = micros();
+    latencyProbe.responseReceived = true;
+  }
 }
 
 String buildLatencyResponse(const String &requestPayload) {
@@ -163,6 +180,42 @@ void handleLatencyEcho() {
   Serial.printf("mqtt_wifi_receiver_latency,response_published=%s,response=%s\n",
                 published ? "yes" : "no",
                 response.c_str());
+}
+
+void runLatencyProbe(const ExperimentCase &experiment) {
+  if (!mqttClient.connected() && !connectMqtt()) {
+    Serial.printf("latency_probe,label=%s,rtt_us=0,response_received=no\n", experiment.label);
+    return;
+  }
+
+  latencyProbe = LatencyProbe{};
+  latencyProbe.active = true;
+
+  const uint32_t sentUs = micros();
+  const String requestPayload = String("sent_us=") + String(sentUs);
+  latencyProbe.sentUs = sentUs;
+
+  if (!mqttClient.publish(kLatencyRequestTopic, requestPayload.c_str())) {
+    latencyProbe.active = false;
+    Serial.printf("latency_probe,label=%s,rtt_us=0,response_received=no\n", experiment.label);
+    return;
+  }
+
+  const uint32_t waitStartMs = millis();
+  while (!latencyProbe.responseReceived && (millis() - waitStartMs) < kLatencyTimeoutMs) {
+    mqttClient.loop();
+    handleLatencyEcho();
+    delay(1);
+  }
+
+  const bool received = latencyProbe.responseReceived;
+  const uint32_t rttUs = received ? (latencyProbe.responseUs - latencyProbe.sentUs) : 0;
+  Serial.printf("latency_probe,label=%s,rtt_us=%lu,response_received=%s\n",
+                experiment.label,
+                static_cast<unsigned long>(rttUs),
+                received ? "yes" : "no");
+
+  latencyProbe.active = false;
 }
 
 void ensureNetwork() {
@@ -251,6 +304,7 @@ void runCase(const ExperimentCase &experiment) {
   const uint32_t captureElapsedUs = micros() - captureStartUs;
   stopCapture();
   processWindow(experiment, captureElapsedUs);
+  runLatencyProbe(experiment);
 }
 
 void runAllExperiments() {

@@ -11,6 +11,7 @@ constexpr uint8_t kStartButtonPin = 0;
 constexpr uint8_t kStartPulsePin = 4;
 constexpr uint32_t kPowerMonitorPeriodMs = 6;
 constexpr uint32_t kEnergyWarmupMs = 200;
+constexpr uint32_t kMqttProbeWindowMs = 250;
 constexpr uint32_t kWifiReconnectPeriodMs = 5000;
 constexpr float kMaxSanePower_mW = 5000.0f;
 constexpr float kMaxSaneCurrent_mA = 2000.0f;
@@ -23,9 +24,7 @@ constexpr char kWifiPass[] = "Mangoblu2020";
 constexpr char kMqttHost[] = "192.168.1.13";
 constexpr uint16_t kMqttPort = 1883;
 constexpr char kMqttClientId[] = "mqtt_wifi_sender";
-constexpr char kLatencyRequestTopic[] = "mqtt_wifi/latency/request";
-constexpr char kLatencyResponseTopic[] = "mqtt_wifi/latency/response";
-constexpr uint32_t kLatencyTimeoutMs = 5000;
+constexpr char kMqttProbeTopic[] = "mqtt_wifi/current_probe";
 
 Adafruit_INA219 ina219;
 WiFiClient wifiClient;
@@ -59,17 +58,31 @@ volatile bool windowOpen = false;
 EnergyWindow energyWindow;
 TaskHandle_t monitorTaskHandle = nullptr;
 
-struct LatencyProbe {
-  bool active = false;
-  bool responseReceived = false;
-  uint32_t requestId = 0;
-  uint32_t sentUs = 0;
-  uint32_t responseUs = 0;
-  String responsePayload;
-};
+bool connectWifi() {
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(kWifiSsid, kWifiPass);
 
-LatencyProbe latencyProbe;
-uint32_t latencyRequestCounter = 0;
+  const uint32_t startMs = millis();
+  while (WiFi.status() != WL_CONNECTED && (millis() - startMs) < 15000) {
+    delay(250);
+  }
+
+  return WiFi.status() == WL_CONNECTED;
+}
+
+bool connectMqtt() {
+  mqttClient.setServer(kMqttHost, kMqttPort);
+  mqttClient.setBufferSize(256);
+  mqttClient.setKeepAlive(60);
+
+  if (!mqttClient.connected()) {
+    if (!mqttClient.connect(kMqttClientId)) {
+      return false;
+    }
+  }
+
+  return true;
+}
 
 struct Component {
   double amplitude;
@@ -253,113 +266,78 @@ void startMonitorTask() {
   xTaskCreatePinnedToCore(powerMonitorTask, "powerMonitor", 4096, nullptr, 1, &monitorTaskHandle, 0);
 }
 
-bool connectWifi() {
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(kWifiSsid, kWifiPass);
-
-  const uint32_t startMs = millis();
-  while (WiFi.status() != WL_CONNECTED && (millis() - startMs) < 15000) {
-    delay(250);
-  }
-
-  return WiFi.status() == WL_CONNECTED;
-}
-
-void onLatencyMessage(char *topic, byte *payload, unsigned int length) {
-  if (strcmp(topic, kLatencyResponseTopic) != 0 || !latencyProbe.active) {
-    return;
-  }
-
-  latencyProbe.responsePayload = String(reinterpret_cast<char *>(payload), length);
-  latencyProbe.responseUs = micros();
-  latencyProbe.responseReceived = true;
-}
-
-bool connectMqtt() {
-  mqttClient.setServer(kMqttHost, kMqttPort);
-  mqttClient.setCallback(onLatencyMessage);
-  mqttClient.setKeepAlive(60);
-  mqttClient.setBufferSize(256);
-
-  if (!mqttClient.connected()) {
-    if (!mqttClient.connect(kMqttClientId)) {
-      return false;
+void finalizeEnergyWindow(float &energy_mJ, float &current_mAs, uint32_t &powerSamples) {
+  taskENTER_CRITICAL(&energyMux);
+  if (energyWindow.hasSample) {
+    uint32_t stopUs = micros();
+    float tailSeconds = (stopUs - energyWindow.lastSampleUs) / 1000000.0f;
+    if (tailSeconds > 0.0f) {
+      energyWindow.energy_mJ += energyWindow.lastPower_mW * tailSeconds;
+      energyWindow.current_mAs += energyWindow.lastCurrent_mA * tailSeconds;
     }
   }
-
-  return mqttClient.subscribe(kLatencyResponseTopic);
+  energy_mJ = energyWindow.energy_mJ;
+  powerSamples = energyWindow.powerSamples;
+  current_mAs = energyWindow.current_mAs;
+  taskEXIT_CRITICAL(&energyMux);
 }
 
-void ensureNetwork() {
-  static uint32_t lastWifiAttemptMs = 0;
-  static uint32_t lastMqttAttemptMs = 0;
+void runMqttPublishCurrentProbe() {
+  stopSignalGenerator();
 
-  if (WiFi.status() != WL_CONNECTED && millis() - lastWifiAttemptMs >= kWifiReconnectPeriodMs) {
-    lastWifiAttemptMs = millis();
-    connectWifi();
-  }
-
-  if (WiFi.status() == WL_CONNECTED && !mqttClient.connected() && millis() - lastMqttAttemptMs >= kWifiReconnectPeriodMs) {
-    lastMqttAttemptMs = millis();
-    connectMqtt();
-  }
-}
-
-String buildLatencyPayload(const ExperimentCase &experiment, uint32_t requestId) {
-  String payload;
-  payload.reserve(128);
-  payload += "request_id=";
-  payload += String(requestId);
-  payload += ";case=";
-  payload += experiment.label;
-  payload += ";target_hz=";
-  payload += String(experiment.targetHz);
-  payload += ";sent_us=";
-  payload += String(micros());
-  return payload;
-}
-
-void runLatencyProbe(const ExperimentCase &experiment) {
-  if (!mqttClient.connected() && !connectMqtt()) {
-    Serial.printf("latency_probe,label=%s,status=mqtt_not_connected\n", experiment.label);
+  if (!connectWifi()) {
+    Serial.println("mqtt_current_probe,status=wifi_failed");
     return;
   }
 
-  latencyProbe = LatencyProbe{};
-  latencyProbe.active = true;
-  latencyProbe.requestId = ++latencyRequestCounter;
-
-  const String payload = buildLatencyPayload(experiment, latencyProbe.requestId);
-  latencyProbe.sentUs = micros();
-
-  if (!mqttClient.publish(kLatencyRequestTopic, payload.c_str())) {
-    latencyProbe.active = false;
-    Serial.printf("latency_probe,label=%s,request_id=%lu,status=publish_failed\n",
-                  experiment.label,
-                  static_cast<unsigned long>(latencyProbe.requestId));
+  if (!connectMqtt()) {
+    Serial.println("mqtt_current_probe,status=mqtt_failed");
     return;
   }
 
-  const uint32_t waitStartMs = millis();
-  while (!latencyProbe.responseReceived && (millis() - waitStartMs) < kLatencyTimeoutMs) {
-    ensureNetwork();
+  resetEnergyWindow();
+  seedEnergyWindow();
+
+  taskENTER_CRITICAL(&energyMux);
+  windowOpen = true;
+  taskEXIT_CRITICAL(&energyMux);
+
+  const uint32_t startUs = micros();
+  const String payload = String("{\"probe\":\"publish\",\"sent_us\":") + String(startUs) + "}";
+  const bool published = mqttClient.publish(kMqttProbeTopic, payload.c_str());
+
+  const uint32_t windowStartMs = millis();
+  while ((millis() - windowStartMs) < kMqttProbeWindowMs) {
     if (mqttClient.connected()) {
       mqttClient.loop();
     }
     yield();
   }
 
-  const bool received = latencyProbe.responseReceived;
-  const uint32_t rttUs = received ? (latencyProbe.responseUs - latencyProbe.sentUs) : 0;
-  Serial.printf(
-      "latency_probe,label=%s,request_id=%lu,rtt_us=%lu,response_received=%s,response=%s\n",
-      experiment.label,
-      static_cast<unsigned long>(latencyProbe.requestId),
-      static_cast<unsigned long>(rttUs),
-      received ? "yes" : "no",
-      received ? latencyProbe.responsePayload.c_str() : "timeout");
+  taskENTER_CRITICAL(&energyMux);
+  windowOpen = false;
+  taskEXIT_CRITICAL(&energyMux);
+  delay(kPowerMonitorPeriodMs + 5);
 
-  latencyProbe.active = false;
+  float energy_mJ = 0.0f;
+  float current_mAs = 0.0f;
+  uint32_t powerSamples = 0;
+  finalizeEnergyWindow(energy_mJ, current_mAs, powerSamples);
+
+  const float elapsedMs = kMqttProbeWindowMs;
+  const float averagePower_mW = elapsedMs > 0.0f ? (energy_mJ * 1000.0f) / elapsedMs : 0.0f;
+  const float averageCurrent_mA = elapsedMs > 0.0f ? (current_mAs * 1000.0f) / elapsedMs : 0.0f;
+
+  Serial.printf(
+      "mqtt_current_probe,published=%s,payload_bytes=%lu,window_ms=%lu,avg_current_mA=%.2f,avg_power_mW=%.2f,energy_mJ=%.2f,power_samples=%lu,payload=%s\n",
+      published ? "yes" : "no",
+      static_cast<unsigned long>(payload.length()),
+      static_cast<unsigned long>(kMqttProbeWindowMs),
+      averageCurrent_mA,
+      averagePower_mW,
+      energy_mJ,
+      static_cast<unsigned long>(powerSamples),
+      payload.c_str());
 }
 
 void pulseStart() {
@@ -411,20 +389,8 @@ void runCase(const ExperimentCase &experiment) {
 
   float energy_mJ = 0.0f;
   uint32_t powerSamples = 0;
-
-  taskENTER_CRITICAL(&energyMux);
-  if (energyWindow.hasSample) {
-    uint32_t stopUs = micros();
-    float tailSeconds = (stopUs - energyWindow.lastSampleUs) / 1000000.0f;
-    if (tailSeconds > 0.0f) {
-      energyWindow.energy_mJ += energyWindow.lastPower_mW * tailSeconds;
-      energyWindow.current_mAs += energyWindow.lastCurrent_mA * tailSeconds;
-    }
-  }
-  energy_mJ = energyWindow.energy_mJ;
-  powerSamples = energyWindow.powerSamples;
   float current_mAs = energyWindow.current_mAs;
-  taskEXIT_CRITICAL(&energyMux);
+  finalizeEnergyWindow(energy_mJ, current_mAs, powerSamples);
 
   float elapsedMs = elapsedUs / 1000.0f;
   float averagePower_mW = elapsedMs > 0.0f ? (energy_mJ * 1000.0f) / elapsedMs : 0.0f;
@@ -454,7 +420,6 @@ void runAllExperiments() {
 
   for (const ExperimentCase &experiment : kCases) {
     runCase(experiment);
-    runLatencyProbe(experiment);
     delay(250);
   }
 
@@ -481,29 +446,38 @@ void setup() {
   configureSignalGenerator();
   startMonitorTask();
 
-  connectWifi();
-  connectMqtt();
+  mqttClient.setBufferSize(256);
 
   Serial.println("Sampling sender starting");
-  Serial.println("Press PRG to wait for receiver and start the run");
+  Serial.println("Short press PRG for analog run, long press PRG for MQTT current probe");
 }
 
 void loop() {
   static int lastButtonState = HIGH;
+  static uint32_t buttonDownMs = 0;
+  static bool longPressHandled = false;
   int buttonState = digitalRead(kStartButtonPin);
 
   if (lastButtonState == HIGH && buttonState == LOW) {
+    buttonDownMs = millis();
+    longPressHandled = false;
     delay(20);
     if (digitalRead(kStartButtonPin) == LOW) {
-      runAllExperiments();
-      Serial.println("Sampling sender completed");
+      // wait for release or long-press handling below
     }
   }
 
-  lastButtonState = buttonState;
-  ensureNetwork();
-  if (mqttClient.connected()) {
-    mqttClient.loop();
+  if (buttonState == LOW && !longPressHandled && (millis() - buttonDownMs) >= 2000) {
+    longPressHandled = true;
+    runMqttPublishCurrentProbe();
+    Serial.println("MQTT current probe completed");
   }
+
+  if (lastButtonState == LOW && buttonState == HIGH && !longPressHandled) {
+    runAllExperiments();
+    Serial.println("Sampling sender completed");
+  }
+
+  lastButtonState = buttonState;
   delay(5);
 }
