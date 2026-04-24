@@ -16,7 +16,7 @@ The final workspace is split into three independent pieces, with the receiver bu
 
 ### Separate experiment data
 
-#### 1. Aggregated sampling results
+#### 1. Sampling results
 
 The table below collects the most relevant results for the three sampling experiments requested in this report: maximum sampling, adaptive sampling and sampling with light sleep.
 
@@ -128,8 +128,6 @@ The device overview in The Things Stack Sandbox shows the end device configurati
 
 The relevant point of this test is not the payload size, but the communication role of LoRa itself. Compared with WiFi/MQTT, LoRa is the longer-range and lower-throughput option, so it is better suited when the device must transmit only a compact aggregated value and keep the radio activity minimal.
 
-This device overview page in The Things Stack is the reference for the LoRa setup used in the experiment. If the screenshot is saved locally later, it can be inserted here as a figure without changing the rest of the section.
-
 ### What changed across experiments
 
 The point of having separate runs was to isolate what each part of the system costs.
@@ -172,3 +170,30 @@ The V2 is connected to the PC via USB, which is the sole power source for the
 entire circuit. Current flows from the USB 5V rail through the INA219 shunt to 
 the V4, so the INA219 captures the full consumption of the V4. The V2 reads the 
 INA219 over I2C and logs the measurements to the serial terminal.
+
+### Bonus project
+
+The `final_bonus` folder contains the bonus implementation started from the final project scaffold.
+
+The receiver benchmark now evaluates three signal profiles and two filters in a deterministic way:
+
+| Signal profile | Description |
+| :--- | :--- |
+| `clean_sine` | pure sinusoid used as the baseline |
+| `noisy_mix` | multi-sine signal with additive noise |
+| `noisy_anomaly` | noisy mix with deterministic spike anomalies |
+
+| Filter | Purpose |
+| :--- | :--- |
+| `zscore` | detect outliers using a global z-score threshold |
+| `hampel` | detect outliers using a local median and MAD window |
+
+The benchmark prints, for each profile and filter combination, the dominant frequency before and after filtering, the mean absolute error reduction, the detection metrics, the filter execution time and the adaptive-rate estimate derived from the filtered FFT result.
+
+The sender side uses the same shared signal model and keeps the INA219 current logging so the waveform generation cost can still be observed independently.
+
+To run the bonus project:
+
+1. Flash the sender from `final_bonus/sender`.
+2. Flash the receiver from `final_bonus/receiver`.
+3. Review the serial output for the experiment table and MQTT summary.
