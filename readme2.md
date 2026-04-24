@@ -22,13 +22,31 @@ The table below collects the most relevant results for the three sampling experi
 
 | Case | Mode | Target rate Hz | Main measured result | Current A |
 | :--- | :--- | :---: | :--- | :---: |
-| Max sampling analogRead | basic / oversampling | max | steady profile around the mid-60 mA range | 0.060 - 0.065 |
-| Max sampling adc1_get_raw | basic / oversampling | max | steady profile around the low-60 mA range | 0.060 - 0.065 |
-| Adaptive sampling receiver | adaptive | 256 | sample_count=1280, average=2295.2398, capture_us=4999756, payload_bytes=109, rtt_us=44935 | not measured in this block |
-| AnalogRead with light sleep | sleep between samples | 250 | wake-sleep pattern with repeated low/high consumption cycles | 0.006 - 0.060 |
-| Raw read with light sleep | sleep between samples | 250 | same wake-sleep consumption profile as the analogRead undersampling case | 0.006 - 0.060 |
+| Max sampling analogRead | oversampling | max | steady profile around the mid-60 mA range | 65mA |
+| Max sampling adc1_get_raw | oversampling | max | steady profile around the low-60 mA range | 62mA |
+
+| AnalogRead 250 Hz | basic | 250 | wake-sleep pattern with repeated low/high consumption cycles | 45mA - 55mA |
+| adc1_get_raw 250 Hz | basic | 250 | wake-sleep pattern with repeated low/high consumption cycles | 45mA - 65mA |
+
+| AnalogRead with light sleep | sleep between samples | 250 | wake-sleep pattern with repeated low/high consumption cycles | 15mA - 58mA |
+| Raw read with light sleep | sleep between samples | 250 | same wake-sleep consumption profile as the analogRead undersampling case | 15mA - 52mA |
 
 The maximum-sampling rows describe the board while it keeps sampling continuously. The adaptive row collects the key metrics from the adapted receiver path, including the transmitted payload size and end-to-end latency. The sleep rows show the current oscillation caused by the repeated wake-up cycle, and the raw undersampling case follows the same consumption profile as the analogRead light-sleep experiment.
+
+##### Graphs for the sampling tests
+
+The following plots show the behavior of the different read modes and frequencies used in the sampling experiments.
+
+| Max sampling | Light sleep at 250 Hz | Light sleep at 500 Hz |
+| :--- | :--- | :--- |
+| ![Max sampling with analogRead](images/max_analog_read.png) | ![AnalogRead with light sleep at 250 Hz](images/250_analog_read_sleepy.png) | ![AnalogRead with light sleep at 500 Hz](images/500_analog_read_sleepy.png) |
+| ![Max sampling with raw read](images/max_raw_read.png) | ![Raw read with light sleep at 250 Hz](images/250_raw_read_sleepy.png) | ![AnalogRead with light sleep at 1000 Hz](images/1000_analog_read_sleepy.png) |
+
+| Light sleep at 2000 Hz | 250 Hz basic read comparison | 250 Hz basic raw comparison |
+| :--- | :--- | :--- |
+| ![AnalogRead with light sleep at 2000 Hz](images/2000_analog_read_sleepy.png) | ![AnalogRead at 250 Hz](images/250_analog_read.png) | ![Raw read at 250 Hz](images/250_raw_read.png) |
+
+The graph sequence makes the boundary of the light-sleep approach visible: at 250 Hz and 500 Hz the wake/sleep alternation remains controllable, while around 1000 Hz the trace already becomes visibly dirtier. Above 1000 Hz, and especially at 2000 Hz, the repeated light-sleep wakeups start to add overhead, the consumption becomes noisier and the pattern is less stable. For this reason light sleep is not a good option for oversampling at high frequency, because the overhead grows faster than the benefit of staying asleep between reads.
 
 #### 2. Max sampling benchmark throughput
 
@@ -40,6 +58,9 @@ This block is for the raw throughput comparison between `analogRead` and `adc1_g
 | adc1_get_raw | 5 | 1212114 | 242422.80 | 41250.25 | 41241.36 | 41254.64 | 3579 |
 
 The result is clear: `adc1_get_raw` is about 2.5x faster than `analogRead` in this benchmark, so it is the better option when the goal is raw ADC throughput.
+
+### RTT
+| Adaptive sampling receiver | adaptive | 256 | sample_count=1280, average=2295.2398, capture_us=4999756, payload_bytes=109, rtt_us=44935 | not measured in this block |
 
 #### 3. MQTT sender, latency and payload volume tests
 
@@ -70,7 +91,7 @@ The target here was not communication, but pure computation:
 * compute the average
 * measure elapsed time and current draw
 
-The repeated runs show that FFT time and current can vary noticeably between executions, so the report should not present a single number as if it were universal. The measured results are summarised below.
+The measured results are summarised below.
 
 | Case | Target rate | FFT elapsed us | Current A | Main note |
 | :--- | :---: | :---: | :---: | :--- |
@@ -136,6 +157,7 @@ The point of having separate runs was to isolate what each part of the system co
 * FFT has a measurable cost, but it is still local and bounded.
 * WiFi and MQTT are the most visible step when they are turned on.
 * Adaptive sampling helps only if the whole execution flow is organized around it.
+* Once the target frequency goes above 1000 Hz, alternating read and light sleep becomes too noisy and power-hungry to remain a valid oversampling strategy.
 
 ### Final setup and wiring
 

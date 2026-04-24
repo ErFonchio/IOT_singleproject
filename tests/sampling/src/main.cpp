@@ -7,11 +7,10 @@ namespace {
 
 constexpr uint8_t kAdcPin = 7; // Heltec WiFi LoRa 32 V4: A6 / GPIO7
 constexpr adc1_channel_t kAdcChannel = ADC1_CHANNEL_6;
-constexpr bool kUseAnalogRead = false;
+constexpr bool kUseAnalogRead = true;
 constexpr uint32_t kTaskStackWords = 4096;
 constexpr UBaseType_t kTaskPriority = tskIDLE_PRIORITY + 1;
 constexpr BaseType_t kTaskCore = 1;
-constexpr TickType_t kSamplePeriodTicks = pdMS_TO_TICKS(4);
 TaskHandle_t benchmarkTaskHandle = nullptr;
 
 int readSelectedSample() {
@@ -31,10 +30,8 @@ void runBenchmarkTask(void *pvParameters) {
 
     Serial.printf("started,%s\n", selectedMethodName());
 
-    TickType_t lastWakeTime = xTaskGetTickCount();
     while (true) {
         (void)readSelectedSample();
-        vTaskDelayUntil(&lastWakeTime, kSamplePeriodTicks);
     }
 }
 
