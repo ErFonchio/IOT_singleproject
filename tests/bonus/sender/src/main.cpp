@@ -9,31 +9,18 @@
 
 namespace {
 
-constexpr uint32_t kSamplingFrequencyHz = bonus::kDefaultSignalRateHz;
+constexpr uint32_t kSamplingFrequencyHz = 250;
 constexpr uint8_t kI2cSdaPin = 21;
 constexpr uint8_t kI2cSclPin = 22;
-constexpr float kNoiseSigma = 0.15f;
-constexpr float kAnomalyProbability = 0.03f;
-constexpr bonus::SignalProfile kSignalProfile = bonus::SignalProfile::NoisyAnomaly;
+constexpr bonus::WaveformType kWaveformType = bonus::WaveformType::Square; // Sine / Square / Triangle
 constexpr uint16_t kWaveformLength = 1024;
+constexpr float kWaveformFrequencyHz = 5.0f;
 
 hw_timer_t *signalTimer = nullptr;
 volatile uint32_t sampleIndex = 0;
 volatile uint8_t lastDacValue = 128;
 Adafruit_INA219 ina219;
 uint8_t waveform[kWaveformLength];
-
-const char *signalProfileName(bonus::SignalProfile profile) {
-  switch (profile) {
-    case bonus::SignalProfile::CleanSine:
-      return "clean_sine";
-    case bonus::SignalProfile::NoisyMix:
-      return "noisy_mix";
-    case bonus::SignalProfile::NoisyAnomaly:
-    default:
-      return "noisy_anomaly";
-  }
-}
 
 void configureIna219() {
   Wire.begin(kI2cSdaPin, kI2cSclPin);
@@ -51,13 +38,10 @@ void configureIna219() {
 
 void precomputeWaveform() {
   for (uint16_t index = 0; index < kWaveformLength; ++index) {
-    const float sample = bonus::generateSample(kSignalProfile,
-                                               index,
-                                               kSamplingFrequencyHz,
-                                               bonus::kDefaultSignalSeed,
-                                               kNoiseSigma,
-                                               kAnomalyProbability,
-                                               nullptr);
+    const float sample = bonus::generateWaveformSample(kWaveformType,
+                                                       index,
+                                                       kSamplingFrequencyHz,
+                                                       kWaveformFrequencyHz);
 
     int dacValue = static_cast<int>(128 + 10.0f * sample);
     if (dacValue < 0) {
@@ -98,7 +82,7 @@ void setup() {
   Serial.begin(115200);
   delay(100);
 
-  Serial.printf("bonus sender profile=%s\n", signalProfileName(kSignalProfile));
+  Serial.printf("bonus sender waveform=%s\n", bonus::waveformName(kWaveformType));
   configureIna219();
   precomputeWaveform();
   configureSignalGenerator();
@@ -107,9 +91,7 @@ void setup() {
 
 void loop() {
   const float currentMilliAmps = ina219.getCurrent_mA();
-  Serial.printf("current_mA=%.3f\tdac=%u\tsample=%lu\n",
-                currentMilliAmps,
-                static_cast<unsigned int>(lastDacValue),
-                static_cast<unsigned long>(sampleIndex));
+  Serial.print(currentMilliAmps);
+  Serial.println();
   delay(50);
 }

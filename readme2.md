@@ -14,41 +14,32 @@ The final workspace is split into three independent pieces, with the receiver bu
 * `final/receiver` for adaptive sampling, FFT and MQTT publication on the Heltec WiFi LoRa 32 V4
 * `final/server` for the local Mosquitto broker used by the WiFi tests
 
-### Separate experiment data
+### Final receiver flow
 
-#### 1. Sampling results
+The `final/receiver` code combines the previous ideas into one complete sequence on the Heltec WiFi LoRa 32 V4:
 
-The table below collects the most relevant results for the three sampling experiments requested in this report: maximum sampling, adaptive sampling and sampling with light sleep.
+1. start with a high-rate sampling phase
+2. run FFT on the captured window
+3. derive an adaptive sampling rate
+4. sample again at the adapted rate
+5. compute the average over the window
+6. connect WiFi and MQTT only at the end
+7. publish the aggregated payload
+8. go to deep sleep after the experiment
 
-| Case | Mode | Target rate Hz | Main measured result | Current A |
-| :--- | :--- | :---: | :--- | :---: |
-| Max sampling analogRead | oversampling | max | steady profile around the mid-60 mA range | 65mA |
-| Max sampling adc1_get_raw | oversampling | max | steady profile around the low-60 mA range | 62mA |
+This structure matters because it keeps the radio off during local processing and postpones network activity until the useful work is done.
 
-| AnalogRead 250 Hz | basic | 250 | wake-sleep pattern with repeated low/high consumption cycles | 45mA - 55mA |
-| adc1_get_raw 250 Hz | basic | 250 | wake-sleep pattern with repeated low/high consumption cycles | 45mA - 65mA |
+The implementation is also split across two cores: the sampling and FFT path runs on core 1, while the WiFi/MQTT publish phase runs on core 0. That separation makes it easier to keep the acquisition side deterministic while the communication side is handled independently on the V4 board.
 
-| AnalogRead with light sleep | sleep between samples | 250 | wake-sleep pattern with repeated low/high consumption cycles | 15mA - 58mA |
-| Raw read with light sleep | sleep between samples | 250 | same wake-sleep consumption profile as the analogRead undersampling case | 15mA - 52mA |
+![Work flow of the main program](images/work_flow.png)
 
-The maximum-sampling rows describe the board while it keeps sampling continuously. The adaptive row collects the key metrics from the adapted receiver path, including the transmitted payload size and end-to-end latency. The sleep rows show the current oscillation caused by the repeated wake-up cycle, and the raw undersampling case follows the same consumption profile as the analogRead light-sleep experiment.
+![Current profile of the final experiment](images/main_experiment_consumes.png)
 
-##### Graphs for the sampling tests
+The plot shows the distinct phases of the integrated run: an initial low-activity region, the sampling and FFT-related step increase, the stable adaptive-sampling plateau, and the final drop when the device finishes the experiment and goes to sleep.
 
-The following plots show the behavior of the different read modes and frequencies used in the sampling experiments.
+### Tests
 
-| Max sampling | Light sleep at 250 Hz | Light sleep at 500 Hz |
-| :--- | :--- | :--- |
-| ![Max sampling with analogRead](images/max_analog_read.png) | ![AnalogRead with light sleep at 250 Hz](images/250_analog_read_sleepy.png) | ![AnalogRead with light sleep at 500 Hz](images/500_analog_read_sleepy.png) |
-| ![Max sampling with raw read](images/max_raw_read.png) | ![Raw read with light sleep at 250 Hz](images/250_raw_read_sleepy.png) | ![AnalogRead with light sleep at 1000 Hz](images/1000_analog_read_sleepy.png) |
-
-| Light sleep at 2000 Hz | 250 Hz basic read comparison | 250 Hz basic raw comparison |
-| :--- | :--- | :--- |
-| ![AnalogRead with light sleep at 2000 Hz](images/2000_analog_read_sleepy.png) | ![AnalogRead at 250 Hz](images/250_analog_read.png) | ![Raw read at 250 Hz](images/250_raw_read.png) |
-
-The graph sequence makes the boundary of the light-sleep approach visible: at 250 Hz and 500 Hz the wake/sleep alternation remains controllable, while around 1000 Hz the trace already becomes visibly dirtier. Above 1000 Hz, and especially at 2000 Hz, the repeated light-sleep wakeups start to add overhead, the consumption becomes noisier and the pattern is less stable. For this reason light sleep is not a good option for oversampling at high frequency, because the overhead grows faster than the benefit of staying asleep between reads.
-
-#### 2. Max sampling benchmark throughput
+#### 1. Max sampling benchmark throughput
 
 This block is for the raw throughput comparison between `analogRead` and `adc1_get_raw`.
 
@@ -59,26 +50,35 @@ This block is for the raw throughput comparison between `analogRead` and `adc1_g
 
 The result is clear: `adc1_get_raw` is about 2.5x faster than `analogRead` in this benchmark, so it is the better option when the goal is raw ADC throughput.
 
-### RTT
-| Adaptive sampling receiver | adaptive | 256 | sample_count=1280, average=2295.2398, capture_us=4999756, payload_bytes=109, rtt_us=44935 | not measured in this block |
+#### 2. Sampling results
 
-#### 3. MQTT sender, latency and payload volume tests
+The table below collects the most relevant results for the three sampling experiments requested in this report: maximum sampling, adaptive sampling and sampling with light sleep.
 
-The MQTT sender tests were used to measure the end-to-end latency of the message path and the amount of data transmitted over the network.
+| Case | Mode | Target rate Hz | Current A | Image |
+| :--- | :--- | :---: | :---: | :--- |
+| Max sampling analogRead | oversampling | max | 65 mA | ![Max sampling with analogRead](images/max_analog_read.png) |
+| Max sampling adc1_get_raw | oversampling | max | 62 mA | ![Max sampling with raw read](images/max_raw_read.png) |
+| AnalogRead 250 Hz | basic | 250 | 45 mA - 55 mA | ![AnalogRead at 250 Hz](images/250_analog_read.png) |
+| adc1_get_raw 250 Hz | basic | 250 | 45 mA - 65 mA | ![Raw read at 250 Hz](images/250_raw_read.png) |
+| AnalogRead with light sleep | sleep between samples | 250 | 15 mA - 58 mA | ![AnalogRead with light sleep at 250 Hz](images/250_analog_read_sleepy.png) |
+| Raw read with light sleep | sleep between samples | 250 | 15 mA - 52 mA | ![Raw read with light sleep at 250 Hz](images/250_raw_read_sleepy.png) |
+| AnalogRead with light sleep | sleep between samples | 500 | 10 mA - 50 mA | ![AnalogRead with light sleep at 500 Hz](images/500_analog_read_sleepy.png) |
+| AnalogRead with light sleep | sleep between samples | 1000 | 20 mA - 70 mA | ![AnalogRead with light sleep at 1000 Hz](images/1000_analog_read_sleepy.png) |
+| AnalogRead with light sleep | sleep between samples | 2000 | 20 mA - 80 mA | ![AnalogRead with light sleep at 2000 Hz](images/2000_analog_read_sleepy.png) |
 
-The sender publishes the aggregated value only, so the payload stays compact. The useful metrics for these runs are:
+The maximum-sampling rows describe the board while it keeps sampling continuously. The adaptive row collects the key metrics from the adapted receiver path, including the transmitted payload size and end-to-end latency. The sleep rows show the current oscillation caused by the repeated wake-up cycle, and the raw undersampling case follows the same consumption profile as the analogRead light-sleep experiment.
 
-* latency, measured as round-trip time in microseconds
-* payload size, measured in bytes
+The higher-frequency light-sleep tests were performed only with `analogRead`, because the oversampling path already showed that the wake/sleep overhead becomes increasingly unstable as the target frequency grows.
 
-The observed results are summarised below.
+##### Graphs for the sampling tests
 
-| Case | Payload bytes | RTT us | Main note |
-| :--- | :---: | :---: | :--- |
-| `mqtt_wifi_receiver / 10k` | 112 | 63153 | local publish with latency probe |
-| `mqtt_wifi_receiver / 256` | 109 | 44935 | same path with lower sampling rate |
+The figure association in the table above is enough to read the plots directly, but the same evidence can be summarized as follows:
 
-The payload volume remains very small because only the aggregated value is transmitted, not the full sample stream. The latency changes more than the payload size, so the dominant cost is the network and radio activity rather than the number of bytes carried by MQTT.
+* The maximum-sampling baseline is shown in [max_analog_read](images/max_analog_read.png) and [max_raw_read](images/max_raw_read.png).
+* The 250 Hz light-sleep comparison is shown in [250_analog_read_sleepy](images/250_analog_read_sleepy.png) and [250_raw_read_sleepy](images/250_raw_read_sleepy.png).
+* The higher-frequency light-sleep experiments are shown only for `analogRead`: [500 Hz](images/500_analog_read_sleepy.png), [1000 Hz](images/1000_analog_read_sleepy.png) and [2000 Hz](images/2000_analog_read_sleepy.png).
+
+The graph sequence makes the boundary of the light-sleep approach visible: at 250 Hz and 500 Hz the wake/sleep alternation remains controllable, while around 1000 Hz the trace already becomes visibly dirtier. Above 1000 Hz, and especially at 2000 Hz, the repeated light-sleep wakeups start to add overhead, the consumption becomes noisier and the pattern is less stable. For this reason light sleep is not a good option for oversampling at high frequency, because the overhead grows faster than the benefit of staying asleep between reads.
 
 #### 4. FFT and averaging tests
 
@@ -100,38 +100,26 @@ The measured results are summarised below.
 
 The FFT results were used to estimate the dominant frequency and to decide the next sampling rate in the receiver. For this report, the important point is the execution time of the FFT stage and the current draw expressed directly in amperes.
 
-#### 5. Final receiver flow
+### RTT
+| Adaptive sampling receiver | adaptive | 256 | sample_count=1280, average=2295.2398, capture_us=4999756, payload_bytes=109, rtt_us=44935 | not measured in this block |
 
-The `final/receiver` code combines the previous ideas into one complete sequence on the Heltec WiFi LoRa 32 V4:
+#### 3. MQTT sender, latency and payload volume tests
 
-1. start with a high-rate sampling phase
-2. run FFT on the captured window
-3. derive an adaptive sampling rate
-4. sample again at the adapted rate
-5. compute the average over the window
-6. connect WiFi and MQTT only at the end
-7. publish the aggregated payload
-8. go to deep sleep after the experiment
+The MQTT sender tests were used to measure the end-to-end latency of the message path and the amount of data transmitted over the network.
 
-This structure matters because it keeps the radio off during local processing and postpones network activity until the useful work is done.
+The sender publishes the aggregated value only, so the payload stays compact. The useful metrics for these runs are:
 
-The implementation is also split across two cores: the sampling and FFT path runs on core 1, while the WiFi/MQTT publish phase runs on core 0. That separation makes it easier to keep the acquisition side deterministic while the communication side is handled independently on the V4 board.
+* latency, measured as round-trip time in microseconds
+* payload size, measured in bytes
 
-```mermaid
-flowchart TD
-	A[Boot receiver] --> B[Core 1: high-rate sampling]
-	B --> C[Core 1: FFT on captured window]
-	C --> D[Core 1: compute adaptive sampling rate]
-	D --> E[Core 1: sample again at adapted rate]
-	E --> F[Core 1: compute average]
-	F --> G[Core 0: connect WiFi and MQTT]
-	G --> H[Core 0: publish aggregated payload]
-	H --> I[Core 0: enter deep sleep]
-```
+The observed results are summarised below.
 
-![Current profile of the final experiment](Screenshot%202026-04-23%20alle%2020.09.24.png)
+| Case | Payload bytes | RTT us | Main note |
+| :--- | :---: | :---: | :--- |
+| `mqtt_wifi_receiver / 10k` | 112 | 63153 | local publish with latency probe |
+| `mqtt_wifi_receiver / 256` | 109 | 44935 | same path with lower sampling rate |
 
-The plot shows the distinct phases of the integrated run: an initial low-activity region, the sampling and FFT-related step increase, the stable adaptive-sampling plateau, and the final drop when the device finishes the experiment and goes to sleep.
+The payload volume remains very small because only the aggregated value is transmitted, not the full sample stream. The latency changes more than the payload size, so the dominant cost is the network and radio activity rather than the number of bytes carried by MQTT.
 
 #### 6. LoRa communication test
 
@@ -193,26 +181,17 @@ entire circuit. Current flows from the USB 5V rail through the INA219 shunt to
 the V4, so the INA219 captures the full consumption of the V4. The V2 reads the 
 INA219 over I2C and logs the measurements to the serial terminal.
 
-### Bonus project
+### Consumption plots by waveform
 
-The `final_bonus` folder contains the bonus implementation started from the final project scaffold.
+The plots below summarize the current consumption of the different shapes. The sinusoidal baseline is shown with the reference plot already captured for the sender, while square and triangle are shown at the two tested frequencies.
 
-The receiver benchmark now evaluates three signal profiles and two filters in a deterministic way:
+| Sine baseline | Square 250 Hz | Square 10000 Hz |
+| :--- | :--- | :--- |
+| ![Sine baseline consumption](images/max_analog_read.png) | ![Square waveform at 250 Hz](images/square_250.png) | ![Square waveform at 10000 Hz](images/square_10000.png) |
 
-| Signal profile | Description |
+| Triangle 250 Hz | Triangle 10000 Hz |
 | :--- | :--- |
-| `clean_sine` | pure sinusoid used as the baseline |
-| `noisy_mix` | multi-sine signal with additive noise |
-| `noisy_anomaly` | noisy mix with deterministic spike anomalies |
-
-| Filter | Purpose |
-| :--- | :--- |
-| `zscore` | detect outliers using a global z-score threshold |
-| `hampel` | detect outliers using a local median and MAD window |
-
-The benchmark prints, for each profile and filter combination, the dominant frequency before and after filtering, the mean absolute error reduction, the detection metrics, the filter execution time and the adaptive-rate estimate derived from the filtered FFT result.
-
-The sender side uses the same shared signal model and keeps the INA219 current logging so the waveform generation cost can still be observed independently.
+| ![Triangle waveform at 250 Hz](images/triangle_250.png) | ![Triangle waveform at 10000 Hz](images/triangle_10000.png) |
 
 To run the bonus project:
 

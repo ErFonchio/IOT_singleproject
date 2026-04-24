@@ -2,6 +2,7 @@
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <arduinoFFT.h>
+#include <driver/adc.h>
 #include <math.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -10,6 +11,7 @@
 #include "secrets.h"
 
 constexpr uint8_t ADC_PIN = 7;
+constexpr adc1_channel_t ADC_CHANNEL = ADC1_CHANNEL_6;
 constexpr uint32_t MAX_SAMPLE_RATE_HZ = 15000;
 constexpr uint32_t ANALYSIS_WINDOW_MS = 5000;
 constexpr uint32_t AGGREGATION_WINDOW_MS = 5000;
@@ -53,7 +55,7 @@ void taskWifiPublish(void *pvParameters);
 void logPhase(const char *phase, const char *detail1 = nullptr, const char *detail2 = nullptr, const char *detail3 = nullptr);
 
 void IRAM_ATTR onSampleTimer() {
-  const uint16_t sample = analogRead(ADC_PIN);
+  const uint16_t sample = static_cast<uint16_t>(adc1_get_raw(ADC_CHANNEL));
 
   if (currentPhase == PHASE_ANALYSIS) {
     if (analysisIndex < ANALYSIS_SAMPLE_TARGET) {
@@ -133,7 +135,7 @@ static uint32_t captureAggregationWithDeadline(uint32_t sampleRateHz, uint32_t &
       waitUntilDeadline(nextSampleDeadlineUs);
     }
 
-    aggregationSum += analogRead(ADC_PIN);
+    aggregationSum += static_cast<uint16_t>(adc1_get_raw(ADC_CHANNEL));
     aggregationIndex++;
 
     nextSampleDeadlineUs += periodUs;
@@ -162,9 +164,20 @@ static void enterDeepSleepAfterExperiment() {
   esp_deep_sleep_start();
 }
 
-static void connectWifi() {
+static void keepWifiOffDuringSampling() {
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_OFF);
+  Serial.println("[wifi] off during sampling phase");
+}
+
+static void enableWifiForPublish() {
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);
+  Serial.println("[wifi] on for publish phase");
+}
+
+static void connectWifi() {
+  enableWifiForPublish();
   WiFi.begin(WIFI_SSID, WIFI_PASS);
 
   Serial.printf("[wifi] connecting to %s\n", WIFI_SSID);
@@ -296,11 +309,11 @@ void setup() {
     Serial.println("[final] boot");
 
     pinMode(ADC_PIN, INPUT);
-    analogReadResolution(12);
-    analogSetAttenuation(ADC_11db);
+    adc1_config_width(ADC_WIDTH_BIT_12);
+    adc1_config_channel_atten(ADC_CHANNEL, ADC_ATTEN_DB_11);
     logPhase("boot", "init wifi/mqtt", "adc pin 7", "setup");
 
-    WiFi.mode(WIFI_OFF);
+    keepWifiOffDuringSampling();
 
     sampleTimer = timerBegin(1, 80, true);
     timerAttachInterrupt(sampleTimer, &onSampleTimer, true);
@@ -370,6 +383,8 @@ void taskSampling(void *pvParameters) {
   char averageBuffer[16];
   formatFloat(averageBuffer, sizeof(averageBuffer), lastAggregatedAverage, 1);
   logPhase("publish", "mqtt local broker", "sending average", averageBuffer);
+
+  enableWifiForPublish();
 
   xTaskCreatePinnedToCore(taskWifiPublish, "taskWifiPublish", 8192, nullptr, 2, &wifiTaskHandle, 0);
   vTaskDelete(nullptr);
