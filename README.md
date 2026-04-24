@@ -1,131 +1,198 @@
+## Report Experiments
 
-# Homework
-The goal of the assignment is to create an IoT system that collects information from a sensor, analyses the data locally and communicates to a nearby server an aggregated value of the sensor readings. The IoT system adapts the sampling frequency in order to save energy and reduce communication overhead. The IoT device will be based on an ESP32 prototype board and the firmware will be developed using the FreeRTOS. You are free to use IoT-Lab or real devices.
+### What this document is
 
-Input: Assume an input signal of the form of SUM(a_k*sin(f_k)). 
-For example: 2*sin(2*pi*3*t)+4*sin(2*pi*5*t)
+This file is the working report of the experiments run in this workspace while building the `final` solution.
 
-Maximum sampling frequency: Identify the maximum sampling frequency of your hardware device, for example, 100Hz. Note 100Hz is only an example. You need to demonstrate the ability of sampling at a very high frequency.
+The purpose is to keep the measurements separated by experiment, so each block can collect its own current, timing and payload data without mixing different execution contexts.
 
-Identify optimal sampling frequency: Compute the FFT and adapt the sampling frequency accordingly. For example, for a maximum frequency of 5 Hz adapt the  sampling frequency to 10Hz.
+### Project layout used in the experiments
 
-Compute aggregate function over a window: Compute the average of the sampled signal over a window, for example, 5 secs.
+The final workspace is split into three independent pieces, with the receiver built for the Heltec WiFi LoRa 32 V4:
 
-Communicate the aggregate value to the nearby server: Transmit the aggregate value, i.e. the average, to a nearby edge server using MQTT over WIFI.
+* `final/sender` for signal generation and current measurement with esp32 V2
+* `final/receiver` for adaptive sampling, FFT and MQTT publication on the Heltec WiFi LoRa 32 V4
+* `final/server` for the local Mosquitto broker used by the WiFi tests
 
-Communicate the aggregate value to the cloud: Transmit the aggregate value, i.e. the average, to a cloud server using LoRaWAN + TTN.
+### Final receiver flow
 
-Measure the performance of the system:
-Evaluate the savings in energy of the new/adaptive sampling frequency against the original over-sampled one. Note that in some cases, the optimized sampling frequency cannot be employed due to the latencies of sleeping policies.
-Measure per-window execution time.
-Measure the volume of data transmitted over the network when the new/adaptive sampling frequency is used against the original over sampled one.
-Measure the end-to-end latency of the system. From the point the data are generated up to the point they are received from the edge server.
-Use an LLM of your choice:
-Implement the aforementioned service through a series of prompts. Comment on the quality of the code produced. Provide the series of prompt issued to achieve the desired outcome.
-Comment on the opportunities and limitations of the LLM.
-Bonus 
-Consider at least 3 different input signals and measure the performance of the system. Discuss different types of an input signal may affect the overall performance in the case of adaptive sampling vs basic/over-sampling.
-In addition to the original clean sinusoidal signal, use an alternative noisy signal type that models : s(t) = 2*sin(2*pi*3*t)+4*sin(2*pi*5*t) + n(t) + A(t) where n(t) is Gaussian noise with small sigma (e.g., σ=0.2) modelling sensor baseline noise and A(t) is an anomaly injection component: a sparse random spike process where, with low probability p (e.g. p = 0.02 per sample), a large-magnitude outlier +/- U(5, 15) is injected that models transient hardware faults, EMI interference, or physical disturbances. Introduce an anomaly-aware filter over a given window using (a) Z-score (assumes low contamination of spikes and mainly Gaussian noise) and (b) Hamper (preferable when anomaly injection rate is high). Evaluate the detection performance of each of the two filters using (since anomalies are synthetically injected, their positions are known): True Positive Rate (TPR) - Fraction of injected anomalies correctly flagged; False Positive Rate (FPR) - Fraction of clean samples incorrectly flagged; Mean Error Reduction across different anomaly injection rates (p=1%, 5%, 10%). Measure the execution time and the energy impact of of each filter. Discuss the impact of anomaly spikes on the  in the FFT. Measure and compare the FFT-estimated dominant frequency anomaly-contaminated signal (unfiltered) and the FFT-estimated dominant frequency anomaly pre-filtering. Discuss the resulting adaptive sampling frequency difference and its energy impact with and without filtering. Measure the effect of the window size of the filter on the performance of system in terms of computational effort, end-to-end delay increase, memory usage. Larger windows improve statistical estimates but increase latency and memory use. Characterize this trade-off empirically.
-What/How to submit
-Create a GitHub repository where you will push all your code and scripts that are need to realize the above assignment.
-Within the main README.md file you need to provide all the necessary technical details that address the questions stated above.
-The GitHub repository should provide a hands-on walk through of the system, clearly explaining how to set up and run your system.
+The `final/receiver` code combines the previous ideas into one complete sequence on the Heltec WiFi LoRa 32 V4:
 
-Collaborations between students and material on the internet.
-The above assignment is done by each student individually. Clearly you should discuss with other students of the course about the
-assignments. However, you must understand well your solutions, the code and the final write-up must be yours and written in isolation. In
-addition, even though you may discuss about how you could implement an algorithm, what type of libraries to use, and so on, the final code must be yours. You may also consult the internet for information, as long as it does not reveal the solution. If a question asks you to design and  implement an algorithm for a problem, it's fine if you find information  about how to resolve a problem with character encoding, for example, but it is not fine if you search for the code or the algorithm for the problem you are being asked. For the projects, you can talk with other students of the course about questions on the programming language, libraries, some API issue, and so on, but both the solutions and the programming must be yours. You are also encouraged to use chatGPT (Claude AI, Gemini, Perplexity, or any
-other Large Language Models (LLM) chatbot tool) as allies to help you solve your homework, and hope you could learn how to use them properly. However, using such tools does not imply adopting their solutions as your own without critical thinking. If we find out that you have violated the policy and you have copied in any way you will automatically fail. If you have any doubts about whether something is allowed or not, ask the instructor.
+1. start with a high-rate sampling phase
+2. run FFT on the captured window
+3. derive an adaptive sampling rate
+4. sample again at the adapted rate
+5. compute the average over the window
+6. connect WiFi and MQTT only at the end
+7. publish the aggregated payload
+8. go to deep sleep after the experiment
 
+This structure matters because it keeps the radio off during local processing and postpones network activity until the useful work is done.
 
-EVALUATION
-Evaluation will be performed during a workshop in the class. You have to show running code capable to receive in input a signal as defined above, e.g. consider the virtual sensor discussed during the class, see link)
-Correctness - Your code works properly in terms of identifying the max freq of the input signal, computing the aggregate function and transmitting to the edge/cloud.
-Performance Evaluation - Evaluate correctly the saving in energy, communication cost and end-to-end latency.
-Quality of the free-RTOS code, presentation (discussions/figures) and structure of the GitHub repository.
-Bonus
+The implementation is also split across two cores: the sampling and FFT path runs on core 1, while the WiFi/MQTT publish phase runs on core 0. That separation makes it easier to keep the acquisition side deterministic while the communication side is handled independently on the V4 board.
 
-We are free to ask any question about your code and to evaluate your answer to increase or decrease the above points
+![Work flow of the main program](images/work_flow.png)
 
-## Commands
-pio run -t upload -e espwroom32
+![Current profile of the final experiment](images/main_experiment_consumes.png)
 
-platformio device monitor -b 115200
+The plot shows the distinct phases of the integrated run: an initial low-activity region, the sampling and FFT-related step increase, the stable adaptive-sampling plateau, and the final drop when the device finishes the experiment and goes to sleep.
 
+### Tests
 
-# results
+#### 1. Max sampling benchmark throughput
 
-## sampling
-### Energy & Time
+This block is for the raw throughput comparison between `analogRead` and `adc1_get_raw`.
 
-1. sampling_sender,label=10k_no_sleep,target_hz=10000,target_samples=50000,signal_hz=10000,period_us=100,elapsed_us=5000006,generator_hz=10402.79,avg_current_mA=62.35,avg_power_mW=291.86,energy_mJ=1459.31,power_samples=833,generator_samples=52014,last_dac=175,missed_deadlines=204
-2. sampling_sender,label=10k_light_sleep,target_hz=10000,target_samples=50000,signal_hz=10000,period_us=100,elapsed_us=5000002,generator_hz=10401.80,avg_current_mA=62.19,avg_power_mW=292.53,energy_mJ=1462.66,power_samples=833,generator_samples=52009,last_dac=203,missed_deadlines=205
-3. sampling_sender,label=256_no_sleep,target_hz=256,target_samples=1280,signal_hz=10000,period_us=3906,elapsed_us=5003591,generator_hz=10401.73,avg_current_mA=62.31,avg_power_mW=291.32,energy_mJ=1457.67,power_samples=834,generator_samples=52046,last_dac=210,missed_deadlines=5
-4. sampling_sender,label=256_light_sleep,target_hz=256,target_samples=1280,signal_hz=10000,period_us=3906,elapsed_us=5003590,generator_hz=10401.93,avg_current_mA=62.37,avg_power_mW=290.74,energy_mJ=1454.72,power_samples=834,generator_samples=52047,last_dac=86,missed_deadlines=5
-sampling_sender_run,total_elapsed_us=21945996,total_elapsed_ms=21946.00
+| Method | Runs | Total elapsed us | Avg elapsed us | Avg rate Hz | Min rate Hz | Max rate Hz | Last sample |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| analogRead | 5 | 3001703 | 600340.62 | 16657.21 | 16656.53 | 16658.14 | 3955 |
+| adc1_get_raw | 5 | 1212114 | 242422.80 | 41250.25 | 41241.36 | 41254.64 | 3579 |
 
+The result is clear: `adc1_get_raw` is about 2.5x faster than `analogRead` in this benchmark, so it is the better option when the goal is raw ADC throughput.
 
-sampling_sender,label=10k_no_sleep,target_hz=10000,target_samples=200000,signal_hz=10000,period_us=100,elapsed_us=20000003,generator_hz=10100.70,avg_current_mA=63.77,avg_power_mW=298.68,energy_mJ=5973.68,power_samples=3333,generator_samples=202014,last_dac=175,missed_deadlines=204
-sampling_sender,label=10k_light_sleep,target_hz=10000,target_samples=200000,signal_hz=10000,period_us=100,elapsed_us=20000004,generator_hz=10100.45,avg_current_mA=63.75,avg_power_mW=298.37,energy_mJ=5967.35,power_samples=3333,generator_samples=202009,last_dac=203,missed_deadlines=205
-sampling_sender,label=256_no_sleep,target_hz=256,target_samples=5120,signal_hz=10000,period_us=3906,elapsed_us=20002632,generator_hz=10100.47,avg_current_mA=63.41,avg_power_mW=296.45,energy_mJ=5929.70,power_samples=3334,generator_samples=202036,last_dac=228,missed_deadlines=5
-sampling_sender,label=256_light_sleep,target_hz=256,target_samples=5120,signal_hz=10000,period_us=3906,elapsed_us=20002642,generator_hz=10100.62,avg_current_mA=63.11,avg_power_mW=294.39,energy_mJ=5888.53,power_samples=3333,generator_samples=202039,last_dac=127,missed_deadlines=5
-sampling_sender_run,total_elapsed_us=81944016,total_elapsed_ms=81944.02
+#### 2. Sampling results
 
-## FFT & AVG
-### Energy & Time
+The table below collects the most relevant results for the three sampling experiments requested in this report: maximum sampling, adaptive sampling and sampling with light sleep.
 
-fft_average_sender,label=10k,target_hz=10000,duration_us=102400,expected_samples=1024,elapsed_us=1894,elapsed_ms=1.8940,generated_samples=310,generated_hz=163674.7624,avg_current_mA=29.661828,avg_power_mW=136.900739,energy_mJ=0.259290,last_dac=120
-fft_average_sender,label=256,target_hz=256,duration_us=4000000,expected_samples=1024,elapsed_us=2085,elapsed_ms=2.0850,generated_samples=310,generated_hz=148681.0552,avg_current_mA=26.751799,avg_power_mW=124.359712,energy_mJ=0.259290,last_dac=220
-FFT average sender completed
-fft_average_sender,label=10k,target_hz=10000,duration_us=102400,expected_samples=1024,elapsed_us=2132,elapsed_ms=2.1320,generated_samples=310,generated_hz=145403.3771,avg_current_mA=26.471200,avg_power_mW=123.626642,energy_mJ=0.263572,last_dac=57
-fft_average_sender,label=256,target_hz=256,duration_us=4000000,expected_samples=1024,elapsed_us=2324,elapsed_ms=2.3240,generated_samples=330,generated_hz=141996.5577,avg_current_mA=48.098150,avg_power_mW=224.303787,energy_mJ=0.521282,last_dac=188
-FFT average sender completed
-fft_average_sender,label=10k,target_hz=10000,duration_us=102400,expected_samples=1024,elapsed_us=2104,elapsed_ms=2.1040,generated_samples=310,generated_hz=147338.4030,avg_current_mA=26.817871,avg_power_mW=125.022814,energy_mJ=0.263048,last_dac=165
-fft_average_sender,label=256,target_hz=256,duration_us=4000000,expected_samples=1024,elapsed_us=56813,elapsed_ms=56.8130,generated_samples=860,generated_hz=15137.3805,avg_current_mA=55.316282,avg_power_mW=254.430782,energy_mJ=14.454976,last_dac=92
-FFT average sender completed
-fft_average_sender,label=10k,target_hz=10000,duration_us=102400,expected_samples=1024,elapsed_us=60494,elapsed_ms=60.4940,generated_samples=900,generated_hz=14877.5085,avg_current_mA=55.858675,avg_power_mW=256.643006,energy_mJ=15.525362,last_dac=86
-fft_average_sender,label=256,target_hz=256,duration_us=4000000,expected_samples=1024,elapsed_us=2283,elapsed_ms=2.2830,generated_samples=310,generated_hz=135786.2462,avg_current_mA=49.331932,avg_power_mW=231.740692,energy_mJ=0.529064,last_dac=82
-FFT average sender completed
-fft_average_sender,label=10k,target_hz=10000,duration_us=102400,expected_samples=1024,elapsed_us=2538,elapsed_ms=2.5380,generated_samples=320,generated_hz=126083.5303,avg_current_mA=43.804885,avg_power_mW=205.400315,energy_mJ=0.521306,last_dac=148
-fft_average_sender,label=256,target_hz=256,duration_us=4000000,expected_samples=1024,elapsed_us=63495,elapsed_ms=63.4950,generated_samples=930,generated_hz=14646.8226,avg_current_mA=55.776320,avg_power_mW=257.615056,energy_mJ=16.357268,last_dac=88
-FFT average sender completed
-fft_average_sender,label=10k,target_hz=10000,duration_us=102400,expected_samples=1024,elapsed_us=2402,elapsed_ms=2.4020,generated_samples=320,generated_hz=133222.3147,avg_current_mA=46.689341,avg_power_mW=217.348876,energy_mJ=0.522072,last_dac=83
-fft_average_sender,label=256,target_hz=256,duration_us=4000000,expected_samples=1024,elapsed_us=2486,elapsed_ms=2.4860,generated_samples=320,generated_hz=128720.8367,avg_current_mA=45.712470,avg_power_mW=215.446500,energy_mJ=0.535600,last_dac=133
-FFT average sender completed
-fft_average_sender,label=10k,target_hz=10000,duration_us=102400,expected_samples=1024,elapsed_us=2496,elapsed_ms=2.4960,generated_samples=320,generated_hz=128205.1282,avg_current_mA=45.403687,avg_power_mW=213.567308,energy_mJ=0.533064,last_dac=89
-fft_average_sender,label=256,target_hz=256,duration_us=4000000,expected_samples=1024,elapsed_us=2495,elapsed_ms=2.4950,generated_samples=320,generated_hz=128256.5130,avg_current_mA=44.899719,avg_power_mW=210.440080,energy_mJ=0.525048,last_dac=239
-FFT average sender completed
-fft_average_sender,label=10k,target_hz=10000,duration_us=102400,expected_samples=1024,elapsed_us=2137,elapsed_ms=2.1370,generated_samples=310,generated_hz=145063.1727,avg_current_mA=26.732617,avg_power_mW=125.911090,energy_mJ=0.269072,last_dac=160
-fft_average_sender,label=256,target_hz=256,duration_us=4000000,expected_samples=1024,elapsed_us=60497,elapsed_ms=60.4970,generated_samples=900,generated_hz=14876.7707,avg_current_mA=55.617945,avg_power_mW=259.367440,energy_mJ=15.690952,last_dac=83
-FFT average sender completed
-fft_average_sender,label=10k,target_hz=10000,duration_us=102400,expected_samples=1024,elapsed_us=42137,elapsed_ms=42.1370,generated_samples=710,generated_hz=16849.7995,avg_current_mA=54.258858,avg_power_mW=252.269170,energy_mJ=10.629866,last_dac=80
-fft_average_sender,label=256,target_hz=256,duration_us=4000000,expected_samples=1024,elapsed_us=1691,elapsed_ms=1.6910,generated_samples=310,generated_hz=183323.4772,avg_current_mA=33.248965,avg_power_mW=155.557658,energy_mJ=0.263048,last_dac=88
-FFT average sender completed
-fft_average_sender,label=10k,target_hz=10000,duration_us=102400,expected_samples=1024,elapsed_us=1895,elapsed_ms=1.8950,generated_samples=310,generated_hz=163588.3905,avg_current_mA=29.563694,avg_power_mW=138.811609,energy_mJ=0.263048,last_dac=167
-fft_average_sender,label=256,target_hz=256,duration_us=4000000,expected_samples=1024,elapsed_us=47617,elapsed_ms=47.6170,generated_samples=770,generated_hz=16170.6953,avg_current_mA=57.015039,avg_power_mW=260.452821,energy_mJ=12.401982,last_dac=86
-FFT average sender completed
-fft_average_sender,label=10k,target_hz=10000,duration_us=102400,expected_samples=1024,elapsed_us=1810,elapsed_ms=1.8100,generated_samples=290,generated_hz=160220.9945,avg_current_mA=31.273425,avg_power_mW=146.054144,energy_mJ=0.264358,last_dac=222
-fft_average_sender,label=256,target_hz=256,duration_us=4000000,expected_samples=1024,elapsed_us=1817,elapsed_ms=1.8170,generated_samples=300,generated_hz=165107.3198,avg_current_mA=31.053825,avg_power_mW=142.560264,energy_mJ=0.259032,last_dac=99
-FFT average sender completed
-fft_average_sender,label=10k,target_hz=10000,duration_us=102400,expected_samples=1024,elapsed_us=2621,elapsed_ms=2.6210,generated_samples=320,generated_hz=122090.8050,avg_current_mA=42.861580,avg_power_mW=203.584891,energy_mJ=0.533596,last_dac=140
-fft_average_sender,label=256,target_hz=256,duration_us=4000000,expected_samples=1024,elapsed_us=1905,elapsed_ms=1.9050,generated_samples=310,generated_hz=162729.6588,avg_current_mA=29.496378,avg_power_mW=136.381102,energy_mJ=0.259806,last_dac=91
-FFT average sender completed
-fft_average_sender,label=10k,target_hz=10000,duration_us=102400,expected_samples=1024,elapsed_us=1786,elapsed_ms=1.7860,generated_samples=310,generated_hz=173572.2284,avg_current_mA=31.680571,avg_power_mW=147.430011,energy_mJ=0.263310,last_dac=179
-fft_average_sender,label=256,target_hz=256,duration_us=4000000,expected_samples=1024,elapsed_us=1490,elapsed_ms=1.4900,generated_samples=320,generated_hz=214765.1007,avg_current_mA=38.138522,avg_power_mW=176.542282,energy_mJ=0.263048,last_dac=133
+| Case | Mode | Target rate Hz | Current A | Image |
+| :--- | :--- | :---: | :---: | :--- |
+| Max sampling analogRead | oversampling | max | 65 mA | ![Max sampling with analogRead](images/max_analog_read.png) |
+| Max sampling adc1_get_raw | oversampling | max | 62 mA | ![Max sampling with raw read](images/max_raw_read.png) |
+| AnalogRead 250 Hz | basic | 250 | 45 mA - 55 mA | ![AnalogRead at 250 Hz](images/250_analog_read.png) |
+| adc1_get_raw 250 Hz | basic | 250 | 45 mA - 65 mA | ![Raw read at 250 Hz](images/250_raw_read.png) |
+| AnalogRead with light sleep | sleep between samples | 250 | 15 mA - 58 mA | ![AnalogRead with light sleep at 250 Hz](images/250_analog_read_sleepy.png) |
+| Raw read with light sleep | sleep between samples | 250 | 15 mA - 52 mA | ![Raw read with light sleep at 250 Hz](images/250_raw_read_sleepy.png) |
+| AnalogRead with light sleep | sleep between samples | 500 | 10 mA - 50 mA | ![AnalogRead with light sleep at 500 Hz](images/500_analog_read_sleepy.png) |
+| AnalogRead with light sleep | sleep between samples | 1000 | 20 mA - 70 mA | ![AnalogRead with light sleep at 1000 Hz](images/1000_analog_read_sleepy.png) |
+| AnalogRead with light sleep | sleep between samples | 2000 | 20 mA - 80 mA | ![AnalogRead with light sleep at 2000 Hz](images/2000_analog_read_sleepy.png) |
 
-## mqtt_sender
-1. sampling_sender,label=10k,target_hz=10000,target_samples=50000,signal_hz=10000,period_us=100,elapsed_us=5000005,generator_hz=10403.39,avg_current_mA=53.81,avg_power_mW=252.27,energy_mJ=1261.35,power_samples=794,generator_samples=52017,last_dac=185,missed_deadlines=201
-latency_probe,label=10k,request_id=1,rtt_us=0,response_received=no,response=timeout
-2. sampling_sender,label=256,target_hz=256,target_samples=1280,signal_hz=10000,period_us=3906,elapsed_us=5003590,generator_hz=10401.93,avg_current_mA=45290.23,avg_power_mW=214846.25,energy_mJ=1075002.50,power_samples=723,generator_samples=52047,last_dac=220,missed_deadlines=5
-latency_probe,label=256,request_id=2,rtt_us=0,response_received=no,response=timeout
-sampling_sender_run,total_elapsed_us=20986000,total_elapsed_ms=20986.00
+The maximum-sampling rows describe the board while it keeps sampling continuously. The sleep rows show the current oscillation caused by the repeated wake-up cycle, and the raw undersampling case follows the same consumption profile as the analogRead light-sleep experiment.
 
-nt=50000,average=2298.9356,capture_us=5001731,payload_bytes=112,published=yes,payload=label=analog_average;case=10k;target_hz=10000;window_s=5;sample_count=50000;average=2298.9356;capture_us=5001731
-mqtt_wifi_receiver_latency,response_published=yes,response=sent_us=11430185;ack_us=11485392
-latency_probe,label=10k,rtt_us=63153,response_received=yes
-Waiting for START pulse on GPIO5...
-START pulse received
-mqtt_wifi_receiver,label=256,target_hz=256,window_s=5,sample_count=1280,average=2295.2398,capture_us=4999756,payload_bytes=109,published=yes,payload=label=analog_average;case=256;target_hz=256;window_s=5;sample_count=1280;average=2295.2398;capture_us=4999756
-mqtt_wifi_receiver_latency,response_published=yes,response=sent_us=16912399;ack_us=16945174
-latency_probe,label=256,rtt_us=44935,response_received=yes
-MQTT WiFi receiver completed
+The higher-frequency light-sleep tests were performed only with `analogRead`, because the oversampling path already showed that the wake/sleep overhead becomes increasingly unstable as the target frequency grows.
+
+##### Graphs for the sampling tests
+
+The figure association in the table above is enough to read the plots directly, but the same evidence can be summarized as follows:
+
+* The maximum-sampling baseline is shown in [max_analog_read](images/max_analog_read.png) and [max_raw_read](images/max_raw_read.png).
+* The 250 Hz light-sleep comparison is shown in [250_analog_read_sleepy](images/250_analog_read_sleepy.png) and [250_raw_read_sleepy](images/250_raw_read_sleepy.png).
+* The higher-frequency light-sleep experiments are shown only for `analogRead`: [500 Hz](images/500_analog_read_sleepy.png), [1000 Hz](images/1000_analog_read_sleepy.png) and [2000 Hz](images/2000_analog_read_sleepy.png).
+
+The graph sequence makes the boundary of the light-sleep approach visible: at 250 Hz and 500 Hz the wake/sleep alternation remains controllable, while around 1000 Hz the trace already becomes visibly dirtier. Above 1000 Hz, and especially at 2000 Hz, the repeated light-sleep wakeups start to add overhead, the consumption becomes noisier and the pattern is less stable. For this reason light sleep is not a good option for oversampling at high frequency, because the overhead grows faster than the benefit of staying asleep between reads.
+
+#### 4. FFT and averaging tests
+
+The FFT and averaging tests were used to measure how long the FFT stage takes and how much current the board draws while doing the computation.
+
+The target here was not communication, but pure computation:
+
+* capture a fixed number of samples
+* run FFT on the window
+* compute the average
+* measure elapsed time and current draw
+
+The measured results are summarised below.
+
+| Case | Target rate | FFT elapsed us | Current A | Main note |
+| :--- | :---: | :---: | :---: | :--- |
+| `fft_average_sender / 15k` | 15000 Hz | 1894 - 2538 | 33mA - 57mA | high-rate capture window |
+| `fft_average_sender / 250` | 250 Hz | 2283 - 63495 | 26mA - 54mA | low-rate capture window |
+
+The FFT results were used to estimate the dominant frequency and to decide the next sampling rate in the receiver. For this part, the important point is the execution time of the FFT stage and the current draw expressed directly in amperes.
+
+#### 3. MQTT sender, RTT and payload volume tests
+
+The MQTT sender tests were used to measure the end-to-end latency of the message path and the amount of data transmitted over the network.
+
+This section also includes the RTT measurement taken from the final receiver path after the adaptive sampling phase. The device first captured a window at the maximum rate, ran FFT to estimate the dominant frequency, selected the adaptive sampling frequency, and then captured a second window at that adapted rate. Only after the aggregation step was complete did the firmware enable WiFi, connect to the local MQTT broker and publish the compact JSON payload.
+
+The value reported here therefore does not describe the sampling phase alone, but the full path from adaptive capture to MQTT publication on the local network. In this run, the receiver collected 1280 samples, computed an average of 2295.2398, spent 4999756 us in the adaptive capture phase, transmitted a 109-byte payload and observed an RTT of 44935 us.
+
+The observed results are summarised below.
+
+| Case | Payload bytes | RTT us | Main note |
+| :--- | :---: | :---: | :--- |
+| `mqtt_wifi_receiver / 10k` | 112 | 63153 | local publish with latency probe |
+| `mqtt_wifi_receiver / 256` | 109 | 44935 | same path with lower sampling rate |
+
+The payload volume remains very small because only the aggregated value is transmitted, not the full sample stream. The latency changes more than the payload size, so the dominant cost is the network and radio activity rather than the number of bytes carried by MQTT.
+
+#### 6. LoRa communication test
+
+This section documents the use of LoRa as the communication method for the wide-area part of the system.
+
+The device overview in The Things Stack Sandbox shows the end device configuration used for the LoRaWAN path:
+
+| Field | Value |
+| :--- | :--- |
+| End device ID | `er-meglio-device` |
+| DevEUI | registered in the application |
+| Frequency plan | Europe 863-870 MHz |
+| LoRaWAN version | 1.0.3 |
+| Uplinks at the time of the screenshot | none yet |
+
+The relevant point of this test is not the payload size, but the communication role of LoRa itself. Compared with WiFi/MQTT, LoRa is the longer-range and lower-throughput option, so it is better suited when the device must transmit only a compact aggregated value and keep the radio activity minimal.
+
+![TTN dashboard](images/ttn_dashboard.png)
+
+### What changed across experiments
+
+The point of having separate runs was to isolate what each part of the system costs.
+
+* Sampling frequency alone does not explain current draw.
+* FFT has a measurable cost, but it is still local and bounded.
+* WiFi and MQTT are the most visible step when they are turned on.
+* Adaptive sampling helps only if the whole execution flow is organized around it.
+* Once the target frequency goes above 1000 Hz, alternating read and light sleep becomes too noisy and power-hungry to remain a valid oversampling strategy.
+
+### Final setup and wiring
+
+#### How to start the final code
+
+The final experiment is started in three steps:
+
+1. Start the local MQTT broker with `cd final/server` and `docker compose up -d`.
+2. Flash and monitor the sender board with `cd final/sender` and `pio run -t upload -t monitor`.
+3. Flash and monitor the receiver board with `cd final/receiver` and `pio run -t upload -t monitor`.
+
+Before launching the receiver, make sure the WiFi credentials and broker address in `final/receiver/src/secrets.h` match the local network.
+
+#### Hardware connections
+
+The INA219 is wired in series with the V4 power supply line, so that all current 
+drawn by the V4 flows through the INA219 shunt and is measured by the V2.
+
+| Signal | From | To | Notes |
+| :--- | :--- | :--- | :--- |
+| Power path | V2 VIN | INA219 VIN+ | 5V USB from PC enters the measurement path |
+| Power path | INA219 VIN- | V4 5V | measured current exits toward the V4 |
+| I2C clock | V2 GPIO22 | INA219 SCL | I2C bus for current readings |
+| I2C data | V2 GPIO21 | INA219 SDA | I2C bus for current readings |
+| INA chip power | V2 3V3 | INA219 VCC | logic supply for the INA219 chip |
+| Common ground | V2 GND | INA219 GND | shared ground |
+| Common ground | V2 GND | V4 GND | shared ground across all three devices |
+| Start pulse | V2 GPIO4 | V4 GPIO5 | V2 signals the start of each experiment |
+| Signal line | V2 GPIO25 | V4 GPIO7 | sinusoidal signal generated by V2, sampled by V4 |
+
+The V2 is connected to the PC via USB, which is the sole power source for the 
+entire circuit. Current flows from the USB 5V rail through the INA219 shunt to 
+the V4, so the INA219 captures the full consumption of the V4. The V2 reads the 
+INA219 over I2C and logs the measurements to the serial terminal.
+
+### Consumption plots by waveform
+
+The plots below summarize the current consumption of the different shapes. The sinusoidal baseline is shown with the reference plot already captured for the sender, while square and triangle are shown at the two tested frequencies.
+
+| Sine baseline | Square 250 Hz | Square 10000 Hz |
+| :--- | :--- | :--- |
+| ![Sine baseline consumption](images/max_analog_read.png) | ![Square waveform at 250 Hz](images/square_250.png) | ![Square waveform at 10000 Hz](images/square_10000.png) |
+
+| Triangle 250 Hz | Triangle 10000 Hz |
+| :--- | :--- |
+| ![Triangle waveform at 250 Hz](images/triangle_250.png) | ![Triangle waveform at 10000 Hz](images/triangle_10000.png) |
+
+To run the bonus project:
+
+1. Flash the sender from `final_bonus/sender`.
+2. Flash the receiver from `final_bonus/receiver`.
+3. Review the serial output for the experiment table and MQTT summary.
